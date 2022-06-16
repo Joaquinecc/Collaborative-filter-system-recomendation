@@ -13,7 +13,7 @@ import scipy
 import time
 # -----------------------------------------
 # Variables globales
-botton_year=2 # Cota inferior en años que indica hasta que fecha se hace la consulta. Ej:1. Se examina las ventas desde hace 1 año
+botton_year=200 # Cota inferior en años que indica hasta que fecha se hace la consulta. Ej:1. Se examina las ventas desde hace 1 año
 columns=["n_cliente","cluster","codigo_barras","incidencia","unidades_compradas","unidades_prom_ticket","facturacion","costo","sucursales"]
 BYTES_TO_MB_DIV = 0.000001
 # Opening JSON file setting
@@ -25,7 +25,7 @@ topNSimilarity=settings_var['topNSimilarity']
 # -----------------------------
 
 def ranking_similarity_client(cx,index,N=10):
-    #Obtenemos los top N Clientes con mas similitud para cada cliente
+    #Por cada cliente se ordena de forma descente y se obtiene los top N clientes con mas similitud
     # @Params:
     #     N: uint : Numero Top . Ej top 10, so n=10
     #     cx: spare matrix
@@ -124,10 +124,9 @@ def make_query(postgreSQL_select_Query):
                                       database=credential["database"])
         cursor = connection.cursor()
         cursor.execute(postgreSQL_select_Query)
-        print("Selecting rows from mobile table using cursor.fetchall")
         dataset = cursor.fetchall()
+        print("Consulta terminada")
 
-        print("Print each row and it's columns values")
     except FileNotFoundError:
         print("Archivo credenciales.json not found")
     except (Exception, psycopg2.Error) as error:
@@ -154,7 +153,6 @@ def filtro_requisitos(df):
 if __name__ == "__main__":
     start_time = time.time()
     print("Start..")
-    print("--- %s seconds ---" % (start_time))
     #ULtimo dia laboral habil.
     last_labour_day=str((datetime.datetime.today() - BDay()).date())
     # Consultamos los productos validos consumido por el cliente y otros valores, como el monto total invertido, la incidencia del cliente,ect..
@@ -237,22 +235,22 @@ if __name__ == "__main__":
     df_ratings=pd.pivot_table(df_ratings, values='rating', index=['n_cliente', 'cluster'],columns=['codigo_barras'], aggfunc=np.mean).fillna(0)
     df_ratings.reset_index(inplace=True)
 
-    # print("Calculando similitud de coseno entre los clietnes")
-    # #Calculando similitud de coseno entre los clietnes
-    # cluster_group = df_ratings.groupby("cluster")
-    # data=[]
-    # for cluster, rows in cluster_group:
-    #     indexs=rows.index
-    #     #Calc Cosine similarity
-    #     sp_cl=scipy.sparse.csr_matrix(rows.drop(['cluster','n_cliente'], axis=1))
-    #     sp_cl=cosine_similarity(sp_cl,dense_output=False)
-    #     sp_cl=scipy.sparse.coo_matrix(sp_cl)
-    #     #calc rank data
-    #     sp_cl=ranking_similarity_client(sp_cl,indexs,N=topNSimilarity)
-    #     if(len(data) == 0):
-    #         data=sp_cl.copy()
-    #     else:
-    #         data = np.concatenate((data, sp_cl))
+    print("Calculando similitud de coseno entre los clietnes")
+    #Calculando similitud de coseno entre los clietnes
+    cluster_group = df_ratings.groupby("cluster")
+    data=[]
+    for cluster, rows in cluster_group:
+        indexs=rows.index
+        #Calc Cosine similarity
+        sp_cl=scipy.sparse.csr_matrix(rows.drop(['cluster','n_cliente'], axis=1))
+        sp_cl=cosine_similarity(sp_cl,dense_output=False)
+        sp_cl=scipy.sparse.coo_matrix(sp_cl)
+        #calc rank data
+        sp_cl=ranking_similarity_client(sp_cl,indexs,N=topNSimilarity)
+        if(len(data) == 0):
+            data=sp_cl.copy()
+        else:
+            data = np.concatenate((data, sp_cl))
 
     # df_rank=pd.DataFrame(data,columns=["n_client","nearest neighbor - <RowID>","distance","nearest neighbor - index"])
     # print(df_rank.head())
