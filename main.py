@@ -2,7 +2,7 @@ import datetime
 # BDay is business day, not birthday...
 from pandas.tseries.offsets import BDay
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
+from multiprocessing import  Pool,cpu_count
 from sklearn.metrics.pairwise import cosine_similarity
 import psycopg2
 from dateutil.relativedelta import relativedelta
@@ -13,7 +13,7 @@ import scipy
 import time
 # -----------------------------------------
 # Variables globales
-botton_year=200 # Cota inferior en años que indica hasta que fecha se hace la consulta. Ej:1. Se examina las ventas desde hace 1 año
+cut_year=1 # Cota inferior en años que indica hasta que fecha se hace la consulta. Ej:1. Se examina las ventas desde hace 1 año
 columns=["n_cliente","cluster","codigo_barras","incidencia","unidades_compradas","unidades_prom_ticket","facturacion","costo","sucursales"]
 BYTES_TO_MB_DIV = 0.000001
 # Opening JSON file setting
@@ -70,14 +70,14 @@ def rank_sku(args):
     print(n_client)
 
     #Neighbor ratings products 
-    df_rating_neighbor= df_ratings.loc[rows["nearest neighbor - <RowID>"]].drop(["Cluster_Cuantitativo"], axis=1)
+    df_rating_neighbor= df_ratings.loc[rows["nearest neighbor - <RowID>"]].drop(["cluster"], axis=1)
     #drop producto columns fill with 0 (product that where not consumed)
     df_rating_neighbor=df_rating_neighbor.loc[:, (df_rating_neighbor != 0).any(axis=0)]
 
 
     #Drop products n_client already consume
     #df_rating_n_client= df_rating_neighbor.loc[[n_client]]
-    df_rating_n_client= df_ratings.loc[[n_client]].drop(["Cluster_Cuantitativo"], axis=1)
+    df_rating_n_client= df_ratings.loc[[n_client]].drop(["cluster"], axis=1)
     df_rating_n_client=df_rating_n_client.loc[:, (df_rating_n_client != 0).any(axis=0)]
     product_already_consumed=df_rating_n_client.columns.tolist()
     df_rating_neighbor=df_rating_neighbor.drop(product_already_consumed, axis=1)
@@ -171,7 +171,7 @@ if __name__ == "__main__":
     from public."Ventas" v 
     left join  public.segmentacion s  on trim(s.codigo_cliente) = trim(v."Codigo_Cliente") 
     where date_trunc('day', v."Fecha_Venta" ) <= to_date('{last_labour_day}', 'YYYY-MM-DD')
-    and date_trunc('day', v."Fecha_Venta" ) > (to_date('{last_labour_day}', 'YYYY-MM-DD') - interval '[{botton_year} days')
+    and date_trunc('day', v."Fecha_Venta" ) > (to_date('{last_labour_day}', 'YYYY-MM-DD') - interval '[{cut_year} years')
     and cliente_juridico = 0 
     and trim(v."Codigo_Producto") not in (
     select va.articulocodigo from public.v_articulos va 
@@ -234,6 +234,7 @@ if __name__ == "__main__":
     #Pivoteamos
     df_ratings=pd.pivot_table(df_ratings, values='rating', index=['n_cliente', 'cluster'],columns=['codigo_barras'], aggfunc=np.mean).fillna(0)
     df_ratings.reset_index(inplace=True)
+    df_ratings.set_index("n_cliente",inplace=True)
 
     print("Calculando similitud de coseno entre los clietnes")
     #Calculando similitud de coseno entre los clietnes
@@ -242,19 +243,26 @@ if __name__ == "__main__":
     for cluster, rows in cluster_group:
         indexs=rows.index
         #Calc Cosine similarity
-        sp_cl=scipy.sparse.csr_matrix(rows.drop(['cluster','n_cliente'], axis=1))
-        sp_cl=cosine_similarity(sp_cl,dense_output=False)
-        sp_cl=scipy.sparse.coo_matrix(sp_cl)
+        sp_cl=scipy.sparse.csr_matrix(rows.drop(['cluster'], axis=1))
+        sp_cl=scipy.sparse.coo_matrix(cosine_similarity(sp_cl,dense_output=False))
         #calc rank data
         sp_cl=ranking_similarity_client(sp_cl,indexs,N=topNSimilarity)
         if(len(data) == 0):
             data=sp_cl.copy()
-        else:
+        else: 
             data = np.concatenate((data, sp_cl))
+    
 
-    # df_rank=pd.DataFrame(data,columns=["n_client","nearest neighbor - <RowID>","distance","nearest neighbor - index"])
-    # print(df_rank.head())
+    df_rank=pd.DataFrame(data,columns=["n_client","nearest neighbor - <RowID>","distance","nearest neighbor - index"])
+    print(df_rank.head())
 
+    clients_group = df_rank.groupby("n_client")
+    df_ranking_sku=pd.DataFrame([],columns=["weigth","producto","n_client","rank"])
+    print("Corriendo pool de procesos")
+    with Pool(cpu_count()) as pool:
+        df_ranking_sku=df_ranking_sku.append(pool.map( rank_sku, [(df_ratings,rows,n_client,topNProduct) for n_client, rows in clients_group]))
+    #save
+    df_ranking_sku.to_csv("recomendacion.csv",index=False)
     print("Finalizo..")
     print("--- %s seconds ---" % (time.time()-start_time))
 
